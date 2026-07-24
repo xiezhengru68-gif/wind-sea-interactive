@@ -24,6 +24,25 @@ type Bubble = {
 };
 
 type HandPoint = { x: number; y: number; z: number };
+type TrackedHand = {
+  x: number;
+  y: number;
+  palmX: number;
+  palmY: number;
+  pinch: boolean;
+  landmarks: HandPoint[];
+};
+type HandState = {
+  x: number;
+  y: number;
+  active: boolean;
+  pinch: boolean;
+  trigger: number;
+  burstX: number;
+  burstY: number;
+  landmarks: HandPoint[];
+  hands: TrackedHand[];
+};
 type SmokeParticle = {
   x: number;
   y: number;
@@ -74,7 +93,17 @@ export default function Home() {
   const burstRequestRef = useRef({ x: .5, y: .5, id: 0 });
   const pointerRef = useRef({ x: .5, y: .5, active: false, lastAt: 0 });
   const windRef = useRef({ x: 1, y: 0, strength: 0 });
-  const handRef = useRef({ x: .5, y: .5, active: false, pinch: false, trigger: 0, landmarks: [] as HandPoint[] });
+  const handRef = useRef<HandState>({
+    x: .5,
+    y: .5,
+    active: false,
+    pinch: false,
+    trigger: 0,
+    burstX: .5,
+    burstY: .5,
+    landmarks: [],
+    hands: [],
+  });
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const cameraFrameRef = useRef<number | null>(null);
   const handTrackerRef = useRef<HandTracker | null>(null);
@@ -233,7 +262,17 @@ export default function Home() {
     cameraStreamRef.current = null;
     handTrackerRef.current?.close?.();
     handTrackerRef.current = null;
-    handRef.current = { x: .5, y: .5, active: false, pinch: false, trigger: 0, landmarks: [] };
+    handRef.current = {
+      x: .5,
+      y: .5,
+      active: false,
+      pinch: false,
+      trigger: 0,
+      burstX: .5,
+      burstY: .5,
+      landmarks: [],
+      hands: [],
+    };
     setCameraActive(false);
     setCameraStatus("off");
   }, []);
@@ -264,7 +303,7 @@ export default function Home() {
           delegate: "GPU" as const,
         },
         runningMode: "VIDEO" as const,
-        numHands: 1,
+        numHands: 2,
         minHandDetectionConfidence: .55,
         minTrackingConfidence: .55,
       };
@@ -288,15 +327,29 @@ export default function Home() {
           lastDetectAt = now;
           lastVideoTime = video.currentTime;
           const result = handTrackerRef.current.detectForVideo(video, now);
-          const points = result.landmarks?.[0];
-          if (points) {
-            const index = points[8];
-            const thumb = points[4];
-            const pinchDistance = Math.hypot(index.x - thumb.x, index.y - thumb.y);
-            const targetX = 1 - index.x;
-            const pinching = pinchDistance < .065;
-            const moveX = targetX - handRef.current.x;
-            const moveY = index.y - handRef.current.y;
+          const detectedHands = result.landmarks ?? [];
+          if (detectedHands.length > 0) {
+            const previousHands = handRef.current.hands;
+            const hands: TrackedHand[] = detectedHands.map((points, handIndex) => {
+              const index = points[8];
+              const thumb = points[4];
+              const palm = points[9];
+              const previous = previousHands[handIndex];
+              const targetX = 1 - index.x;
+              const targetPalmX = 1 - palm.x;
+              const smoothing = previous ? .42 : 1;
+              return {
+                x: previous ? previous.x + (targetX - previous.x) * smoothing : targetX,
+                y: previous ? previous.y + (index.y - previous.y) * smoothing : index.y,
+                palmX: previous ? previous.palmX + (targetPalmX - previous.palmX) * smoothing : targetPalmX,
+                palmY: previous ? previous.palmY + (palm.y - previous.palmY) * smoothing : palm.y,
+                pinch: Math.hypot(index.x - thumb.x, index.y - thumb.y) < .065,
+                landmarks: points,
+              };
+            });
+            const primary = hands[0];
+            const moveX = primary.x - handRef.current.x;
+            const moveY = primary.y - handRef.current.y;
             const moveDistance = Math.hypot(moveX, moveY);
             if (moveDistance > .022) {
               windRef.current = {
@@ -305,17 +358,22 @@ export default function Home() {
                 strength: Math.min(1.35, Math.max(windRef.current.strength, .55 + moveDistance * 8)),
               };
             }
+            const freshPinch = hands.find((candidate, index) => candidate.pinch && !previousHands[index]?.pinch);
             handRef.current = {
-              x: handRef.current.x + (targetX - handRef.current.x) * .42,
-              y: handRef.current.y + (index.y - handRef.current.y) * .42,
+              x: primary.x,
+              y: primary.y,
               active: true,
-              pinch: pinching,
-              trigger: handRef.current.trigger + (pinching && !handRef.current.pinch ? 1 : 0),
-              landmarks: points,
+              pinch: primary.pinch,
+              trigger: handRef.current.trigger + (freshPinch ? 1 : 0),
+              burstX: freshPinch?.x ?? handRef.current.burstX,
+              burstY: freshPinch?.y ?? handRef.current.burstY,
+              landmarks: primary.landmarks,
+              hands,
             };
           } else {
             handRef.current.active = false;
             handRef.current.landmarks = [];
+            handRef.current.hands = [];
           }
         }
         cameraFrameRef.current = requestAnimationFrame(detectHand);
@@ -372,6 +430,11 @@ export default function Home() {
     let last = performance.now();
     let lastBurstRequest = 0;
     let lastHandTrigger = 0;
+    let lastPalmMistAt = 0;
+    let cloudArmed = false;
+    let lastCloudSeenAt = 0;
+    let lastCloudCompressAt = 0;
+    const smokeLimit = window.innerWidth <= 760 ? 128 : 170;
 
     const burstBubble = (bubble: Bubble) => {
       const radius = Math.max(12, bubble.sr);
@@ -379,7 +442,9 @@ export default function Home() {
       bubble.cooldown = 900;
       bubble.vx = 0;
       bubble.vy = 0;
-      if (smokeRef.current.length > 158) smokeRef.current.splice(0, smokeRef.current.length - 158);
+      if (smokeRef.current.length > smokeLimit - 22) {
+        smokeRef.current.splice(0, smokeRef.current.length - (smokeLimit - 22));
+      }
       for (let index = 0; index < 22; index += 1) {
         const angle = Math.random() * Math.PI * 2;
         const speed = .018 + Math.random() * .075;
@@ -398,6 +463,46 @@ export default function Home() {
       }
       setPopped((value) => value + 1);
       if ("vibrate" in navigator) navigator.vibrate([12, 22, 9]);
+    };
+
+    const compressCloudIntoBubble = (x: number, y: number, width: number, height: number) => {
+      const bubbles = bubblesRef.current;
+      let bubble = bubbles.find((candidate) => candidate.hidden > 0);
+      if (!bubble) {
+        bubble = bubbles.reduce((smallest, candidate) => candidate.radius < smallest.radius ? candidate : smallest);
+      }
+      bubble.x = x / width;
+      bubble.y = y / height;
+      bubble.z = .96;
+      bubble.radius = 31;
+      bubble.hidden = 0;
+      bubble.cooldown = 950;
+      bubble.vx = 0;
+      bubble.vy = -.00008;
+      bubble.squash = .92;
+      bubble.angle = 0;
+      bubble.sx = x;
+      bubble.sy = y;
+      bubble.sr = 77;
+      for (let index = 0; index < 10; index += 1) {
+        const angle = Math.PI * 2 * index / 10;
+        const maxLife = 620 + Math.random() * 430;
+        smokeRef.current.push({
+          x: x + Math.cos(angle) * (10 + Math.random() * 20),
+          y: y + Math.sin(angle) * (7 + Math.random() * 14),
+          vx: Math.cos(angle) * .018,
+          vy: Math.sin(angle) * .01 - .014,
+          size: 12 + Math.random() * 13,
+          life: maxLife,
+          maxLife,
+          phase: angle,
+          opacity: .22 + Math.random() * .18,
+        });
+      }
+      if (smokeRef.current.length > smokeLimit) {
+        smokeRef.current.splice(0, smokeRef.current.length - smokeLimit);
+      }
+      if ("vibrate" in navigator) navigator.vibrate([10, 18, 24]);
     };
 
     const draw = (now: number) => {
@@ -428,11 +533,10 @@ export default function Home() {
 
       const hand = handRef.current;
       const pointer = pointerRef.current;
-      const interaction = hand.active ? hand : pointer;
-      const interactionX = interaction.x * rect.width;
-      const interactionY = interaction.y * rect.height;
-      const interactionActive = interaction.active;
-      const interactionPinch = hand.active && hand.pinch;
+      const trackedHands = hand.active ? hand.hands : [];
+      const pointerX = pointer.x * rect.width;
+      const pointerY = pointer.y * rect.height;
+      const pointerActive = pointer.active && trackedHands.length === 0;
 
       let burstX = -1000;
       let burstY = -1000;
@@ -444,8 +548,8 @@ export default function Home() {
         shouldBurst = true;
       } else if (hand.active && hand.trigger !== lastHandTrigger) {
         lastHandTrigger = hand.trigger;
-        burstX = hand.x * rect.width;
-        burstY = hand.y * rect.height;
+        burstX = hand.burstX * rect.width;
+        burstY = hand.burstY * rect.height;
         shouldBurst = true;
       }
       if (shouldBurst) {
@@ -460,6 +564,69 @@ export default function Home() {
           }
         }
         if (closest) burstBubble(closest);
+      }
+
+      const screenHands = trackedHands.map((tracked) => ({
+        ...tracked,
+        x: tracked.x * rect.width,
+        y: tracked.y * rect.height,
+        palmX: tracked.palmX * rect.width,
+        palmY: tracked.palmY * rect.height,
+      }));
+      if (screenHands.length > 0 && now - lastPalmMistAt > (rect.width <= 760 ? 82 : 58)) {
+        lastPalmMistAt = now;
+        for (const tracked of screenHands) {
+          const maxLife = 720 + Math.random() * 420;
+          smokeRef.current.push({
+            x: tracked.palmX + (Math.random() - .5) * 22,
+            y: tracked.palmY + (Math.random() - .5) * 18,
+            vx: (Math.random() - .5) * .018,
+            vy: -.012 - Math.random() * .018,
+            size: 10 + Math.random() * 13,
+            life: maxLife,
+            maxLife,
+            phase: Math.random() * Math.PI * 2,
+            opacity: .13 + Math.random() * .14,
+          });
+        }
+        if (smokeRef.current.length > smokeLimit) {
+          smokeRef.current.splice(0, smokeRef.current.length - smokeLimit);
+        }
+      }
+
+      let cloudGesture: {
+        first: (typeof screenHands)[number];
+        second: (typeof screenHands)[number];
+        distance: number;
+        strength: number;
+        midpointX: number;
+        midpointY: number;
+      } | null = null;
+      if (screenHands.length >= 2) {
+        const first = screenHands[0];
+        const second = screenHands[1];
+        const distance = Math.hypot(second.palmX - first.palmX, second.palmY - first.palmY);
+        const spreadThreshold = Math.min(260, Math.max(125, rect.width * .28));
+        const compressThreshold = Math.min(100, Math.max(62, rect.width * .11));
+        const midpointX = (first.palmX + second.palmX) * .5;
+        const midpointY = (first.palmY + second.palmY) * .5;
+        cloudGesture = {
+          first,
+          second,
+          distance,
+          strength: Math.max(0, Math.min(1, (distance - compressThreshold) / (spreadThreshold - compressThreshold))),
+          midpointX,
+          midpointY,
+        };
+        lastCloudSeenAt = now;
+        if (distance > spreadThreshold) cloudArmed = true;
+        if (cloudArmed && distance < compressThreshold && now - lastCloudCompressAt > 1350) {
+          compressCloudIntoBubble(midpointX, midpointY, rect.width, rect.height);
+          lastCloudCompressAt = now;
+          cloudArmed = false;
+        }
+      } else if (now - lastCloudSeenAt > 720) {
+        cloudArmed = false;
       }
 
       context.globalCompositeOperation = "screen";
@@ -500,18 +667,30 @@ export default function Home() {
         bubble.sy = y;
         bubble.sr = radius;
 
-        if (interactionActive) {
-          const dx = x - interactionX;
-          const dy = y - interactionY;
+        if (pointerActive) {
+          const dx = x - pointerX;
+          const dy = y - pointerY;
           const distance = Math.max(1, Math.hypot(dx, dy));
-          const reach = radius + (hand.active ? 58 : 28);
+          const reach = radius + 28;
           if (distance < reach) {
             const pressure = Math.pow(1 - distance / reach, .72);
             bubble.vx += dx / distance * pressure * .000025 * dt;
             bubble.vy += dy / distance * pressure * .000025 * dt;
-            bubble.squash = Math.max(bubble.squash, pressure * (interactionPinch ? .9 : .62));
+            bubble.squash = Math.max(bubble.squash, pressure * .62);
             bubble.angle = Math.atan2(dy, dx);
           }
+        }
+        for (const tracked of screenHands) {
+          const dx = x - tracked.x;
+          const dy = y - tracked.y;
+          const distance = Math.max(1, Math.hypot(dx, dy));
+          const reach = radius + 58;
+          if (distance >= reach) continue;
+          const pressure = Math.pow(1 - distance / reach, .72);
+          bubble.vx += dx / distance * pressure * .000025 * dt;
+          bubble.vy += dy / distance * pressure * .000025 * dt;
+          bubble.squash = Math.max(bubble.squash, pressure * (tracked.pinch ? .9 : .62));
+          bubble.angle = Math.atan2(dy, dx);
         }
 
         const squeeze = bubble.squash;
@@ -583,6 +762,48 @@ export default function Home() {
         return true;
       });
 
+      context.save();
+      context.globalCompositeOperation = "screen";
+      for (const tracked of screenHands) {
+        for (let orbit = 0; orbit < 3; orbit += 1) {
+          const angle = now * (.0014 + orbit * .00018) + orbit * Math.PI * .68;
+          const orbitRadius = 16 + orbit * 6;
+          const size = 14 + orbit * 3 + Math.sin(now * .002 + orbit) * 2;
+          const x = tracked.palmX + Math.cos(angle) * orbitRadius;
+          const y = tracked.palmY + Math.sin(angle * .82) * orbitRadius * .62;
+          context.globalAlpha = .1 + orbit * .035;
+          context.drawImage(smokeSprite, x - size, y - size, size * 2, size * 2);
+        }
+      }
+      if (cloudGesture) {
+        const dx = cloudGesture.second.palmX - cloudGesture.first.palmX;
+        const dy = cloudGesture.second.palmY - cloudGesture.first.palmY;
+        const distance = Math.max(1, cloudGesture.distance);
+        const normalX = -dy / distance;
+        const normalY = dx / distance;
+        const puffCount = rect.width <= 760 ? 6 : 8;
+        for (let puff = 0; puff < puffCount; puff += 1) {
+          const progress = (puff + .5) / puffCount;
+          const wave = Math.sin(now * .0022 + puff * 1.7) * (8 + cloudGesture.strength * 10);
+          const x = cloudGesture.first.palmX + dx * progress + normalX * wave;
+          const y = cloudGesture.first.palmY + dy * progress + normalY * wave;
+          const centerWeight = 1 - Math.abs(progress - .5) * 1.3;
+          const size = 24 + centerWeight * 19 + cloudGesture.strength * 8;
+          context.globalAlpha = .13 + cloudGesture.strength * .2;
+          context.drawImage(smokeSprite, x - size, y - size, size * 2, size * 2);
+        }
+        context.globalAlpha = .16 + cloudGesture.strength * .16;
+        const centerSize = 38 + cloudGesture.strength * 18;
+        context.drawImage(
+          smokeSprite,
+          cloudGesture.midpointX - centerSize,
+          cloudGesture.midpointY - centerSize,
+          centerSize * 2,
+          centerSize * 2,
+        );
+      }
+      context.restore();
+
       if (wind.strength > .045) {
         const length = 70 + wind.strength * 150;
         context.save();
@@ -607,8 +828,9 @@ export default function Home() {
         context.restore();
       }
 
-      if (hand.active && hand.landmarks.length === 21) {
-        const joints = hand.landmarks.map((point) => ({ x: (1 - point.x) * rect.width, y: point.y * rect.height }));
+      for (const tracked of screenHands) {
+        if (tracked.landmarks.length !== 21) continue;
+        const joints = tracked.landmarks.map((point) => ({ x: (1 - point.x) * rect.width, y: point.y * rect.height }));
         const links = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
         context.save();
         context.globalCompositeOperation = "screen";
@@ -626,8 +848,8 @@ export default function Home() {
         context.stroke();
         const tip = joints[8];
         context.beginPath();
-        context.arc(tip.x, tip.y, hand.pinch ? 13 : 9, 0, Math.PI * 2);
-        context.fillStyle = hand.pinch ? "rgba(255,207,246,.62)" : "rgba(194,246,255,.62)";
+        context.arc(tip.x, tip.y, tracked.pinch ? 13 : 9, 0, Math.PI * 2);
+        context.fillStyle = tracked.pinch ? "rgba(255,207,246,.62)" : "rgba(194,246,255,.62)";
         context.fill();
         context.restore();
       }
@@ -731,7 +953,7 @@ export default function Home() {
 
       <div className="camera-peek" data-visible={cameraActive ? "true" : "false"} aria-hidden={!cameraActive}>
         <video ref={cameraVideoRef} muted playsInline />
-        <span><i /> 手势已捕捉</span>
+        <span><i /> 双手拉云 · 合拢成泡</span>
       </div>
 
       <div className="entry" aria-hidden={entered}>
@@ -750,8 +972,8 @@ export default function Home() {
           <button type="button" className={surround ? "active" : ""} onClick={() => void toggleSurround()} aria-pressed={surround} title="开启空间3D环绕；手机可跟随转动">
             <span className="surround-icon">◎</span>{surround ? "3D环绕" : "开启3D"}
           </button>
-          <button type="button" className={cameraActive ? "active" : ""} onClick={() => void toggleCamera()} aria-pressed={cameraActive} title="开启摄像头：捏合泡泡，快速挥手起风">
-            <span className="camera-icon">◉</span>{cameraStatus === "loading" ? "识别中" : cameraStatus === "error" ? "请授权" : cameraActive ? "挥手起风" : "伸手触碰"}
+          <button type="button" className={cameraActive ? "active" : ""} onClick={() => void toggleCamera()} aria-pressed={cameraActive} title="开启摄像头：烟雾缠绕手掌；双手拉开成云，合拢压成泡泡">
+            <span className="camera-icon">◉</span>{cameraStatus === "loading" ? "识别中" : cameraStatus === "error" ? "请授权" : cameraActive ? "双手捏云" : "伸手触碰"}
           </button>
           <label className="music-picker" title={`选择你有权使用的本地音乐 · ${musicName}`}>
             <input type="file" accept="audio/*" onChange={(event) => void chooseMusic(event)} />
