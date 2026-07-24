@@ -513,35 +513,17 @@ export default function Home() {
       }
       bubble.x = x / width;
       bubble.y = y / height;
-      bubble.z = .96;
-      bubble.radius = 31;
+      bubble.z = 1;
+      bubble.radius = 36;
       bubble.hidden = 0;
       bubble.cooldown = 950;
       bubble.vx = 0;
       bubble.vy = -.00008;
-      bubble.squash = .92;
+      bubble.squash = 1.08;
       bubble.angle = 0;
       bubble.sx = x;
       bubble.sy = y;
-      bubble.sr = 77;
-      for (let index = 0; index < 10; index += 1) {
-        const angle = Math.PI * 2 * index / 10;
-        const maxLife = 620 + Math.random() * 430;
-        smokeRef.current.push({
-          x: x + Math.cos(angle) * (10 + Math.random() * 20),
-          y: y + Math.sin(angle) * (7 + Math.random() * 14),
-          vx: Math.cos(angle) * .018,
-          vy: Math.sin(angle) * .01 - .014,
-          size: 12 + Math.random() * 13,
-          life: maxLife,
-          maxLife,
-          phase: angle,
-          opacity: .22 + Math.random() * .18,
-        });
-      }
-      if (smokeRef.current.length > smokeLimit) {
-        smokeRef.current.splice(0, smokeRef.current.length - smokeLimit);
-      }
+      bubble.sr = 82;
       spawnPinwheels(x, y, 3);
       if ("vibrate" in navigator) navigator.vibrate([10, 18, 24]);
     };
@@ -793,7 +775,7 @@ export default function Home() {
         return true;
       });
 
-      if (cloudGesture) {
+      if (cloudGesture && cloudGesture.strength > .12) {
         context.save();
         context.globalCompositeOperation = "screen";
         const dx = cloudGesture.second.palmX - cloudGesture.first.palmX;
@@ -801,26 +783,35 @@ export default function Home() {
         const distance = Math.max(1, cloudGesture.distance);
         const normalX = -dy / distance;
         const normalY = dx / distance;
-        const puffCount = rect.width <= 760 ? 6 : 8;
-        for (let puff = 0; puff < puffCount; puff += 1) {
-          const progress = (puff + .5) / puffCount;
-          const wave = Math.sin(now * .0022 + puff * 1.7) * (8 + cloudGesture.strength * 10);
-          const x = cloudGesture.first.palmX + dx * progress + normalX * wave;
-          const y = cloudGesture.first.palmY + dy * progress + normalY * wave;
-          const centerWeight = 1 - Math.abs(progress - .5) * 1.3;
-          const size = 24 + centerWeight * 19 + cloudGesture.strength * 8;
-          context.globalAlpha = .13 + cloudGesture.strength * .2;
-          context.drawImage(smokeSprite, x - size, y - size, size * 2, size * 2);
+        const cloudAlpha = Math.min(1, (cloudGesture.strength - .12) / .88);
+        context.lineCap = "round";
+        context.filter = `blur(${rect.width <= 760 ? 7 : 10}px)`;
+        for (let ribbon = 0; ribbon < 3; ribbon += 1) {
+          const wave = Math.sin(now * .0016 + ribbon * 2.1) * (10 + cloudGesture.strength * 12);
+          context.beginPath();
+          context.moveTo(cloudGesture.first.palmX, cloudGesture.first.palmY);
+          context.quadraticCurveTo(
+            cloudGesture.midpointX + normalX * wave,
+            cloudGesture.midpointY + normalY * wave,
+            cloudGesture.second.palmX,
+            cloudGesture.second.palmY,
+          );
+          context.strokeStyle = `rgba(226,246,255,${(.055 + ribbon * .018) * cloudAlpha})`;
+          context.lineWidth = (22 + ribbon * 9) * (.72 + cloudGesture.strength * .3);
+          context.stroke();
         }
-        context.globalAlpha = .16 + cloudGesture.strength * .16;
-        const centerSize = 38 + cloudGesture.strength * 18;
-        context.drawImage(
-          smokeSprite,
-          cloudGesture.midpointX - centerSize,
-          cloudGesture.midpointY - centerSize,
-          centerSize * 2,
-          centerSize * 2,
+        context.filter = "none";
+        context.beginPath();
+        context.moveTo(cloudGesture.first.palmX, cloudGesture.first.palmY);
+        context.quadraticCurveTo(
+          cloudGesture.midpointX + normalX * Math.sin(now * .0018) * 8,
+          cloudGesture.midpointY + normalY * Math.sin(now * .0018) * 8,
+          cloudGesture.second.palmX,
+          cloudGesture.second.palmY,
         );
+        context.strokeStyle = `rgba(210,242,255,${.11 * cloudAlpha})`;
+        context.lineWidth = 3 + cloudGesture.strength * 3;
+        context.stroke();
         context.restore();
       }
 
