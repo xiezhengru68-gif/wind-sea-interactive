@@ -54,6 +54,16 @@ type SmokeParticle = {
   phase: number;
   opacity: number;
 };
+type HeartParticle = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  life: number;
+  maxLife: number;
+  phase: number;
+};
 type Pinwheel = {
   id: number;
   x: number;
@@ -104,6 +114,7 @@ export default function Home() {
   const visualFrameRef = useRef<number | null>(null);
   const bubblesRef = useRef<Bubble[]>([]);
   const smokeRef = useRef<SmokeParticle[]>([]);
+  const heartParticlesRef = useRef<HeartParticle[]>([]);
   const pinwheelsRef = useRef<Pinwheel[]>([]);
   const pinwheelGrabRequestRef = useRef({ pinwheelId: -1, request: 0 });
   const burstRequestRef = useRef({ x: .5, y: .5, id: 0 });
@@ -451,9 +462,48 @@ export default function Home() {
     let cloudArmed = false;
     let lastCloudSeenAt = 0;
     let lastCloudCompressAt = 0;
+    let heartCandidateSince = 0;
+    let heartLastSeenAt = 0;
+    let heartActive = false;
+    let heartCenterX = window.innerWidth * .5;
+    let heartCenterY = window.innerHeight * .48;
+    let heartSize = 76;
+    let lastHeartParticleAt = 0;
     let seededPinwheels = false;
     const smokeLimit = window.innerWidth <= 760 ? 128 : 170;
     const pinwheelLimit = window.innerWidth <= 760 ? 10 : 14;
+    const heartParticleLimit = window.innerWidth <= 760 ? 22 : 30;
+
+    const traceHeart = (size: number) => {
+      context.beginPath();
+      context.moveTo(0, size * .4);
+      context.bezierCurveTo(-size * .58, size * .04, -size * .52, -size * .48, -size * .17, -size * .5);
+      context.bezierCurveTo(-size * .02, -size * .51, 0, -size * .31, 0, -size * .24);
+      context.bezierCurveTo(0, -size * .31, size * .02, -size * .51, size * .17, -size * .5);
+      context.bezierCurveTo(size * .52, -size * .48, size * .58, size * .04, 0, size * .4);
+      context.closePath();
+    };
+
+    const spawnHeartParticles = (x: number, y: number, count: number) => {
+      for (let index = 0; index < count; index += 1) {
+        const maxLife = 1050 + Math.random() * 900;
+        const angle = -Math.PI * (.2 + Math.random() * .6);
+        const speed = .018 + Math.random() * .028;
+        heartParticlesRef.current.push({
+          x: x + (Math.random() - .5) * 36,
+          y: y + (Math.random() - .5) * 24,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed - .018,
+          size: 7 + Math.random() * 8,
+          life: maxLife,
+          maxLife,
+          phase: Math.random() * Math.PI * 2,
+        });
+      }
+      if (heartParticlesRef.current.length > heartParticleLimit) {
+        heartParticlesRef.current.splice(0, heartParticlesRef.current.length - heartParticleLimit);
+      }
+    };
 
     const spawnPinwheels = (x: number, y: number, count: number) => {
       for (let index = 0; index < count; index += 1) {
@@ -595,6 +645,61 @@ export default function Home() {
         }
       }
 
+      let heartForming = false;
+      if (screenHands.length >= 2 && screenHands[0].landmarks.length === 21 && screenHands[1].landmarks.length === 21) {
+        const firstPoints = screenHands[0].landmarks;
+        const secondPoints = screenHands[1].landmarks;
+        const firstIndex = firstPoints[8];
+        const secondIndex = secondPoints[8];
+        const firstThumb = firstPoints[4];
+        const secondThumb = secondPoints[4];
+        const indexDistance = Math.hypot(firstIndex.x - secondIndex.x, firstIndex.y - secondIndex.y);
+        const thumbDistance = Math.hypot(firstThumb.x - secondThumb.x, firstThumb.y - secondThumb.y);
+        const indexMidY = (firstIndex.y + secondIndex.y) * .5;
+        const thumbMidY = (firstThumb.y + secondThumb.y) * .5;
+        const palmDistance = Math.hypot(
+          firstPoints[9].x - secondPoints[9].x,
+          firstPoints[9].y - secondPoints[9].y,
+        );
+        heartForming =
+          indexDistance < .105 &&
+          thumbDistance < .145 &&
+          thumbMidY - indexMidY > .035 &&
+          thumbMidY - indexMidY < .3 &&
+          palmDistance > .16 &&
+          palmDistance < .72;
+
+        if (heartForming) {
+          const indexMidX = (2 - firstIndex.x - secondIndex.x) * .5 * rect.width;
+          const thumbMidX = (2 - firstThumb.x - secondThumb.x) * .5 * rect.width;
+          const targetX = (indexMidX + thumbMidX) * .5;
+          const targetY = (indexMidY + thumbMidY) * .5 * rect.height;
+          heartCenterX += (targetX - heartCenterX) * .3;
+          heartCenterY += (targetY - heartCenterY) * .3;
+          heartSize += (
+            Math.max(58, Math.min(105, palmDistance * rect.width * .24)) -
+            heartSize
+          ) * .2;
+          heartLastSeenAt = now;
+          if (heartCandidateSince === 0) heartCandidateSince = now;
+          if (now - heartCandidateSince > 360) {
+            if (!heartActive) {
+              heartActive = true;
+              spawnHeartParticles(heartCenterX, heartCenterY, 10);
+              if ("vibrate" in navigator) navigator.vibrate([12, 28, 18]);
+            } else if (now - lastHeartParticleAt > 190) {
+              spawnHeartParticles(heartCenterX, heartCenterY, 2);
+              lastHeartParticleAt = now;
+            }
+          }
+        } else {
+          heartCandidateSince = 0;
+        }
+      } else {
+        heartCandidateSince = 0;
+      }
+      if (!heartForming && now - heartLastSeenAt > 260) heartActive = false;
+
       let burstX = -1000;
       let burstY = -1000;
       let shouldBurst = false;
@@ -656,7 +761,7 @@ export default function Home() {
         midpointX: number;
         midpointY: number;
       } | null = null;
-      if (screenHands.length >= 2) {
+      if (!heartForming && !heartActive && screenHands.length >= 2) {
         const first = screenHands[0];
         const second = screenHands[1];
         const distance = Math.hypot(second.palmX - first.palmX, second.palmY - first.palmY);
@@ -679,6 +784,8 @@ export default function Home() {
           lastCloudCompressAt = now;
           cloudArmed = false;
         }
+      } else if (heartForming || heartActive) {
+        cloudArmed = false;
       } else if (now - lastCloudSeenAt > 720) {
         cloudArmed = false;
       }
@@ -965,6 +1072,61 @@ export default function Home() {
         return true;
       });
 
+      heartParticlesRef.current = heartParticlesRef.current.filter((particle) => {
+        particle.life -= dt;
+        if (particle.life <= 0) return false;
+        particle.x += particle.vx * dt + Math.sin(now * .002 + particle.phase) * .012 * dt;
+        particle.y += particle.vy * dt;
+        particle.vx *= Math.pow(.99, dt / 16.67);
+        particle.vy -= .000006 * dt;
+        const age = 1 - particle.life / particle.maxLife;
+        const alpha = Math.min(1, age * 7) * Math.pow(1 - age, 1.25);
+        context.save();
+        context.globalCompositeOperation = "screen";
+        context.globalAlpha = alpha * .78;
+        context.translate(particle.x, particle.y);
+        context.rotate(Math.sin(now * .0025 + particle.phase) * .16);
+        context.shadowColor = "#ff8ed8";
+        context.shadowBlur = 10;
+        traceHeart(particle.size);
+        context.fillStyle = age % .35 < .17 ? "rgba(255,146,220,.94)" : "rgba(122,218,255,.94)";
+        context.fill();
+        context.restore();
+        return true;
+      });
+
+      if (heartActive) {
+        const pulse = 1 + Math.sin(now * .007) * .055;
+        context.save();
+        context.globalCompositeOperation = "screen";
+        context.translate(heartCenterX, heartCenterY);
+        context.scale(pulse, pulse);
+        context.shadowColor = "#ff8bd8";
+        context.shadowBlur = 28;
+        traceHeart(heartSize);
+        const heartGradient = context.createLinearGradient(
+          -heartSize * .5,
+          -heartSize * .4,
+          heartSize * .5,
+          heartSize * .4,
+        );
+        heartGradient.addColorStop(0, "rgba(119,220,255,.9)");
+        heartGradient.addColorStop(.48, "rgba(255,224,248,.96)");
+        heartGradient.addColorStop(1, "rgba(255,111,198,.92)");
+        context.fillStyle = heartGradient;
+        context.fill();
+        context.shadowBlur = 0;
+        context.lineWidth = 1.4;
+        context.strokeStyle = "rgba(255,255,255,.72)";
+        context.stroke();
+        context.globalAlpha = .38 + Math.sin(now * .01) * .08;
+        context.scale(.62, .62);
+        traceHeart(heartSize);
+        context.fillStyle = "rgba(255,255,255,.5)";
+        context.fill();
+        context.restore();
+      }
+
       for (const tracked of screenHands) {
         if (tracked.landmarks.length !== 21) continue;
         const joints = tracked.landmarks.map((point) => ({ x: (1 - point.x) * rect.width, y: point.y * rect.height }));
@@ -1127,7 +1289,7 @@ export default function Home() {
 
       <div className="camera-peek" data-visible={cameraActive ? "true" : "false"} aria-hidden={!cameraActive}>
         <video ref={cameraVideoRef} muted playsInline />
-        <span><i /> 双手拉云 · 捏住风车</span>
+        <span><i /> 双手比心 · 捏住风车</span>
       </div>
 
       <div className="entry" aria-hidden={entered}>
@@ -1146,8 +1308,8 @@ export default function Home() {
           <button type="button" className={surround ? "active" : ""} onClick={() => void toggleSurround()} aria-pressed={surround} title="开启空间3D环绕；手机可跟随转动">
             <span className="surround-icon">◎</span>{surround ? "3D环绕" : "开启3D"}
           </button>
-          <button type="button" className={cameraActive ? "active" : ""} onClick={() => void toggleCamera()} aria-pressed={cameraActive} title="开启摄像头：双手拉开形成云带；在蓝色风车附近捏合手指即可拿起，松开后放飞">
-            <span className="camera-icon">◉</span>{cameraStatus === "loading" ? "识别中" : cameraStatus === "error" ? "请授权" : cameraActive ? "拿蓝风车" : "伸手触碰"}
+          <button type="button" className={cameraActive ? "active" : ""} onClick={() => void toggleCamera()} aria-pressed={cameraActive} title="开启摄像头：双手拇指和食指相接会亮起爱心；在蓝色风车附近捏合手指即可拿起">
+            <span className="camera-icon">◉</span>{cameraStatus === "loading" ? "识别中" : cameraStatus === "error" ? "请授权" : cameraActive ? "手势互动" : "伸手触碰"}
           </button>
           <label className="music-picker" title={`选择你有权使用的本地音乐 · ${musicName}`}>
             <input type="file" accept="audio/*" onChange={(event) => void chooseMusic(event)} />
