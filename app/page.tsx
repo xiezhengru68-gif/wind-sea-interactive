@@ -121,8 +121,6 @@ export default function Home() {
     stage.style.setProperty("--near-y", `${offsetY * -48}px`);
     stage.style.setProperty("--rotate-x", `${offsetY * -9}deg`);
     stage.style.setProperty("--rotate-y", `${offsetX * 13}deg`);
-    stage.style.setProperty("--focus-x", `${x * 100}%`);
-    stage.style.setProperty("--focus-y", `${y * 100}%`);
   }, []);
 
   const toggleSurround = useCallback(async () => {
@@ -708,7 +706,6 @@ export default function Home() {
         <Image className="concert-backdrop" src={`${BASE_PATH}/wind-sea-stage-reimagined-v2.png`} alt="" fill priority sizes="110vw" unoptimized />
         <div className="blue-atmosphere" />
         <div className="light-rig"><i /><i /><i /><i /><i /></div>
-        <div className="lens-glow" />
         <div className="depth-halo"><i /><i /><i /></div>
         <div className="crowd-near" />
       </div>

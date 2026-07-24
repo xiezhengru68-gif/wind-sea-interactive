@@ -20,8 +20,6 @@ button { color: inherit; }
   --near-y: 0px;
   --rotate-x: 0deg;
   --rotate-y: 0deg;
-  --focus-x: 50%;
-  --focus-y: 50%;
   position: relative;
   width: 100vw;
   height: 100svh;
@@ -48,7 +46,7 @@ button { color: inherit; }
 .concert[data-entered="false"] .concert-world { filter: saturate(.92) brightness(.58); transform: perspective(720px) scale(1.09); }
 .concert[data-playing="false"][data-entered="true"] .concert-world { filter: saturate(.72) brightness(.62); }
 
-.concert-backdrop, .blue-atmosphere, .light-rig, .lens-glow, .crowd-near, .depth-halo {
+.concert-backdrop, .blue-atmosphere, .light-rig, .crowd-near, .depth-halo {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -74,14 +72,6 @@ button { color: inherit; }
   transform: translate3d(var(--mid-x), var(--mid-y), 25px) scale(1.07);
   will-change: transform;
 }
-.blue-atmosphere::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at var(--focus-x) var(--focus-y), rgba(91,208,255,calc(.08 + var(--bass))), transparent 27%);
-  mix-blend-mode: screen;
-}
-
 .light-rig { z-index: 3; overflow: hidden; mix-blend-mode: screen; opacity: calc(.2 + var(--energy)); transform: translate3d(var(--mid-x), var(--mid-y), 80px) scale(1.08); will-change: transform; }
 .light-rig i {
   position: absolute;
@@ -101,7 +91,6 @@ button { color: inherit; }
 .light-rig i:nth-child(4) { transform: rotate(24deg); animation-delay: -7s; }
 .light-rig i:nth-child(5) { transform: rotate(46deg); animation-delay: -4s; }
 
-.lens-glow { z-index: 4; background: radial-gradient(circle at var(--focus-x) var(--focus-y), rgba(100,220,255,calc(.08 + var(--bass))), transparent 18%); mix-blend-mode: screen; transform: translate3d(var(--near-x), var(--near-y), 135px) scale(1.12); will-change: transform; }
 .depth-halo {
   z-index: 4;
   left: 50%;
