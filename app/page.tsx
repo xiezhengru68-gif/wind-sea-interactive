@@ -55,6 +55,7 @@ type SmokeParticle = {
   opacity: number;
 };
 type Pinwheel = {
+  id: number;
   x: number;
   y: number;
   vx: number;
@@ -62,7 +63,7 @@ type Pinwheel = {
   size: number;
   angle: number;
   spin: number;
-  color: "red" | "blue";
+  holder: number | "pointer" | null;
   life: number;
   maxLife: number;
   phase: number;
@@ -85,7 +86,7 @@ const lyrics: Lyric[] = [
   { time: 54, text: "让白色的烟，沿着指尖散开" },
   { time: 72, text: "转动视线，海与星光正在身边流动" },
   { time: 90, text: "这一刻，风有了方向" },
-  { time: 108, text: "这一刻，你也成为舞台的一部分" },
+  { time: 108, text: "让一枚蓝色风车，在手心迎风旋转" },
   { time: 126, text: "让所有喧闹，沉进温柔的蓝色" },
   { time: 144, text: "再触碰一颗泡泡，把愿望放进风里" },
   { time: 162, text: "夜晚没有结束，它只是变成了记忆" },
@@ -104,6 +105,7 @@ export default function Home() {
   const bubblesRef = useRef<Bubble[]>([]);
   const smokeRef = useRef<SmokeParticle[]>([]);
   const pinwheelsRef = useRef<Pinwheel[]>([]);
+  const pinwheelGrabRequestRef = useRef({ pinwheelId: -1, request: 0 });
   const burstRequestRef = useRef({ x: .5, y: .5, id: 0 });
   const pointerRef = useRef({ x: .5, y: .5, active: false, lastAt: 0 });
   const windRef = useRef({ x: 1, y: 0, strength: 0 });
@@ -444,10 +446,11 @@ export default function Home() {
     let last = performance.now();
     let lastBurstRequest = 0;
     let lastHandTrigger = 0;
+    let lastPinwheelGrabRequest = 0;
+    let pinwheelIdSequence = 0;
     let cloudArmed = false;
     let lastCloudSeenAt = 0;
     let lastCloudCompressAt = 0;
-    let pinwheelSequence = 0;
     let seededPinwheels = false;
     const smokeLimit = window.innerWidth <= 760 ? 128 : 170;
     const pinwheelLimit = window.innerWidth <= 760 ? 10 : 14;
@@ -457,6 +460,7 @@ export default function Home() {
         const maxLife = 7600 + Math.random() * 4200;
         const angle = Math.random() * Math.PI * 2;
         pinwheelsRef.current.push({
+          id: pinwheelIdSequence++,
           x: x + (Math.random() - .5) * 34,
           y: y + (Math.random() - .5) * 26,
           vx: Math.cos(angle) * (.012 + Math.random() * .026),
@@ -464,7 +468,7 @@ export default function Home() {
           size: 14 + Math.random() * 9,
           angle,
           spin: (index % 2 === 0 ? 1 : -1) * (.0024 + Math.random() * .0018),
-          color: pinwheelSequence++ % 2 === 0 ? "red" : "blue",
+          holder: null,
           life: maxLife,
           maxLife,
           phase: Math.random() * Math.PI * 2,
@@ -570,6 +574,26 @@ export default function Home() {
       const pointerX = pointer.x * rect.width;
       const pointerY = pointer.y * rect.height;
       const pointerActive = pointer.active && trackedHands.length === 0;
+      const screenHands = trackedHands.map((tracked) => ({
+        ...tracked,
+        x: tracked.x * rect.width,
+        y: tracked.y * rect.height,
+        palmX: tracked.palmX * rect.width,
+        palmY: tracked.palmY * rect.height,
+      }));
+      const pointerGrabRequest = pinwheelGrabRequestRef.current;
+      if (pointerGrabRequest.request !== lastPinwheelGrabRequest) {
+        lastPinwheelGrabRequest = pointerGrabRequest.request;
+        const target = pinwheelsRef.current.find(
+          (pinwheel) =>
+            pinwheel.id === pointerGrabRequest.pinwheelId &&
+            pinwheel.holder === null,
+        );
+        if (target) {
+          target.holder = "pointer";
+          target.life = Math.max(target.life, 3200);
+        }
+      }
 
       let burstX = -1000;
       let burstY = -1000;
@@ -583,7 +607,32 @@ export default function Home() {
         lastHandTrigger = hand.trigger;
         burstX = hand.burstX * rect.width;
         burstY = hand.burstY * rect.height;
-        shouldBurst = true;
+        let closestPinwheel: Pinwheel | null = null;
+        let closestPinwheelDistance = Number.POSITIVE_INFINITY;
+        for (const candidate of pinwheelsRef.current) {
+          if (candidate.holder !== null) continue;
+          const distance = Math.hypot(candidate.x - burstX, candidate.y - burstY);
+          if (distance < Math.max(42, candidate.size * 2.4) && distance < closestPinwheelDistance) {
+            closestPinwheel = candidate;
+            closestPinwheelDistance = distance;
+          }
+        }
+        if (closestPinwheel) {
+          let holderIndex = 0;
+          let holderDistance = Number.POSITIVE_INFINITY;
+          screenHands.forEach((tracked, index) => {
+            const distance = Math.hypot(tracked.x - burstX, tracked.y - burstY);
+            if (distance < holderDistance) {
+              holderIndex = index;
+              holderDistance = distance;
+            }
+          });
+          closestPinwheel.holder = holderIndex;
+          closestPinwheel.life = Math.max(closestPinwheel.life, 3600);
+          if ("vibrate" in navigator) navigator.vibrate(10);
+        } else {
+          shouldBurst = true;
+        }
       }
       if (shouldBurst) {
         let closest: Bubble | null = null;
@@ -598,14 +647,6 @@ export default function Home() {
         }
         if (closest) burstBubble(closest);
       }
-
-      const screenHands = trackedHands.map((tracked) => ({
-        ...tracked,
-        x: tracked.x * rect.width,
-        y: tracked.y * rect.height,
-        palmX: tracked.palmX * rect.width,
-        palmY: tracked.palmY * rect.height,
-      }));
 
       let cloudGesture: {
         first: (typeof screenHands)[number];
@@ -842,25 +883,56 @@ export default function Home() {
       pinwheelsRef.current = pinwheelsRef.current.filter((pinwheel) => {
         pinwheel.life -= dt;
         if (pinwheel.life <= 0) return false;
-        pinwheel.x += pinwheel.vx * dt + wind.x * wind.strength * .028 * dt;
-        pinwheel.y += pinwheel.vy * dt + wind.y * wind.strength * .018 * dt;
-        pinwheel.vx *= Math.pow(.994, dt / 16.67);
-        pinwheel.vy *= Math.pow(.998, dt / 16.67);
+        let targetX: number | null = null;
+        let targetY: number | null = null;
+        if (pinwheel.holder === "pointer") {
+          if (pointer.active) {
+            targetX = pointerX;
+            targetY = pointerY;
+          } else {
+            pinwheel.holder = null;
+          }
+        } else if (typeof pinwheel.holder === "number") {
+          const heldByHand = screenHands[pinwheel.holder];
+          if (heldByHand?.pinch) {
+            targetX = heldByHand.x;
+            targetY = heldByHand.y;
+          } else {
+            pinwheel.holder = null;
+          }
+        }
+        if (targetX !== null && targetY !== null) {
+          const moveX = targetX - pinwheel.x;
+          const moveY = targetY - pinwheel.y;
+          const divisor = Math.max(12, dt);
+          pinwheel.vx = Math.max(-.34, Math.min(.34, moveX / divisor * .56));
+          pinwheel.vy = Math.max(-.34, Math.min(.34, moveY / divisor * .56));
+          pinwheel.x += moveX * .58;
+          pinwheel.y += moveY * .58;
+          pinwheel.life = Math.max(pinwheel.life, 3200);
+        } else {
+          pinwheel.x += pinwheel.vx * dt + wind.x * wind.strength * .028 * dt;
+          pinwheel.y += pinwheel.vy * dt + wind.y * wind.strength * .018 * dt;
+          pinwheel.vx *= Math.pow(.994, dt / 16.67);
+          pinwheel.vy *= Math.pow(.998, dt / 16.67);
+        }
         const spinDirection = Math.sign(pinwheel.spin) || 1;
-        pinwheel.angle += (pinwheel.spin + spinDirection * (wind.strength * .011 + energy * .004)) * dt;
+        const movementSpin = Math.min(.014, Math.hypot(pinwheel.vx, pinwheel.vy) * .035);
+        pinwheel.angle += (pinwheel.spin + spinDirection * (wind.strength * .011 + energy * .004 + movementSpin)) * dt;
         const age = 1 - pinwheel.life / pinwheel.maxLife;
-        const alpha = Math.min(1, age * 6) * Math.min(1, pinwheel.life / 1100);
-        if (pinwheel.y < -pinwheel.size * 3 || pinwheel.x < -pinwheel.size * 4 || pinwheel.x > rect.width + pinwheel.size * 4) {
+        const alpha = pinwheel.holder !== null ? 1 : Math.min(1, age * 6) * Math.min(1, pinwheel.life / 1100);
+        if (pinwheel.holder === null && (pinwheel.y < -pinwheel.size * 3 || pinwheel.x < -pinwheel.size * 4 || pinwheel.x > rect.width + pinwheel.size * 4)) {
           return false;
         }
 
-        const primary = pinwheel.color === "red" ? "rgba(255,76,110,.96)" : "rgba(52,178,255,.96)";
-        const secondary = pinwheel.color === "red" ? "rgba(255,164,178,.94)" : "rgba(160,232,255,.94)";
+        const primary = "rgba(52,178,255,.96)";
+        const secondary = "rgba(160,232,255,.94)";
         context.save();
         context.globalCompositeOperation = "screen";
         context.globalAlpha = alpha * .92;
         context.translate(pinwheel.x, pinwheel.y);
         context.rotate(Math.sin(now * .0013 + pinwheel.phase) * .09);
+        if (pinwheel.holder !== null) context.scale(1.12, 1.12);
         context.strokeStyle = "rgba(218,242,255,.58)";
         context.lineWidth = Math.max(.8, pinwheel.size * .055);
         context.beginPath();
@@ -868,8 +940,8 @@ export default function Home() {
         context.lineTo(0, pinwheel.size * 1.72);
         context.stroke();
         context.rotate(pinwheel.angle);
-        context.shadowColor = pinwheel.color === "red" ? "#ff6f91" : "#55cfff";
-        context.shadowBlur = 8;
+        context.shadowColor = "#55cfff";
+        context.shadowBlur = pinwheel.holder !== null ? 14 : 8;
         for (let blade = 0; blade < 4; blade += 1) {
           context.beginPath();
           context.moveTo(0, 0);
@@ -968,11 +1040,42 @@ export default function Home() {
     const stage = stageRef.current;
     if (!stage) return;
     const rect = stage.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+    const screenX = x * rect.width;
+    const screenY = y * rect.height;
+    let closestPinwheel: Pinwheel | null = null;
+    let closestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of pinwheelsRef.current) {
+      if (candidate.holder !== null) continue;
+      const distance = Math.hypot(candidate.x - screenX, candidate.y - screenY);
+      if (distance < Math.max(34, candidate.size * 2.1) && distance < closestDistance) {
+        closestPinwheel = candidate;
+        closestDistance = distance;
+      }
+    }
+    if (closestPinwheel) {
+      pinwheelGrabRequestRef.current = {
+        pinwheelId: closestPinwheel.id,
+        request: pinwheelGrabRequestRef.current.request + 1,
+      };
+      pointerRef.current = { x, y, active: true, lastAt: performance.now() };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      if ("vibrate" in navigator) navigator.vibrate(10);
+      return;
+    }
     burstRequestRef.current = {
-      x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-      y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
+      x,
+      y,
       id: burstRequestRef.current.id + 1,
     };
+  };
+
+  const releasePointerGrab = (event: React.PointerEvent<HTMLElement>) => {
+    pointerRef.current.active = false;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   };
 
   const formatTime = (time: number) => `${Math.floor(time / 60)}:${String(Math.floor(time % 60)).padStart(2, "0")}`;
@@ -987,7 +1090,13 @@ export default function Home() {
       data-surround={surround ? "true" : "false"}
       onPointerMove={moveView}
       onPointerDown={requestBubbleBurst}
-      onPointerLeave={() => { pointerRef.current.active = false; }}
+      onPointerUp={releasePointerGrab}
+      onPointerCancel={releasePointerGrab}
+      onPointerLeave={() => {
+        if (!pinwheelsRef.current.some((pinwheel) => pinwheel.holder === "pointer")) {
+          pointerRef.current.active = false;
+        }
+      }}
     >
       <div className="concert-world" aria-hidden="true">
         <Image className="concert-backdrop" src={`${BASE_PATH}/wind-sea-stage-reimagined-v2.png`} alt="" fill priority sizes="110vw" unoptimized />
@@ -1018,7 +1127,7 @@ export default function Home() {
 
       <div className="camera-peek" data-visible={cameraActive ? "true" : "false"} aria-hidden={!cameraActive}>
         <video ref={cameraVideoRef} muted playsInline />
-        <span><i /> 双手拉云 · 合拢成泡</span>
+        <span><i /> 双手拉云 · 捏住风车</span>
       </div>
 
       <div className="entry" aria-hidden={entered}>
@@ -1037,8 +1146,8 @@ export default function Home() {
           <button type="button" className={surround ? "active" : ""} onClick={() => void toggleSurround()} aria-pressed={surround} title="开启空间3D环绕；手机可跟随转动">
             <span className="surround-icon">◎</span>{surround ? "3D环绕" : "开启3D"}
           </button>
-          <button type="button" className={cameraActive ? "active" : ""} onClick={() => void toggleCamera()} aria-pressed={cameraActive} title="开启摄像头：双手拉开形成云带，合拢压成泡泡；挥手让红蓝风车旋转">
-            <span className="camera-icon">◉</span>{cameraStatus === "loading" ? "识别中" : cameraStatus === "error" ? "请授权" : cameraActive ? "双手捏云" : "伸手触碰"}
+          <button type="button" className={cameraActive ? "active" : ""} onClick={() => void toggleCamera()} aria-pressed={cameraActive} title="开启摄像头：双手拉开形成云带；在蓝色风车附近捏合手指即可拿起，松开后放飞">
+            <span className="camera-icon">◉</span>{cameraStatus === "loading" ? "识别中" : cameraStatus === "error" ? "请授权" : cameraActive ? "拿蓝风车" : "伸手触碰"}
           </button>
           <label className="music-picker" title={`选择你有权使用的本地音乐 · ${musicName}`}>
             <input type="file" accept="audio/*" onChange={(event) => void chooseMusic(event)} />
