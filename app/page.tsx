@@ -54,6 +54,19 @@ type SmokeParticle = {
   phase: number;
   opacity: number;
 };
+type Pinwheel = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  angle: number;
+  spin: number;
+  color: "red" | "blue";
+  life: number;
+  maxLife: number;
+  phase: number;
+};
 type HandTracker = {
   detectForVideo: (video: HTMLVideoElement, timestamp: number) => { landmarks?: HandPoint[][] };
   close?: () => void;
@@ -90,6 +103,7 @@ export default function Home() {
   const visualFrameRef = useRef<number | null>(null);
   const bubblesRef = useRef<Bubble[]>([]);
   const smokeRef = useRef<SmokeParticle[]>([]);
+  const pinwheelsRef = useRef<Pinwheel[]>([]);
   const burstRequestRef = useRef({ x: .5, y: .5, id: 0 });
   const pointerRef = useRef({ x: .5, y: .5, active: false, lastAt: 0 });
   const windRef = useRef({ x: 1, y: 0, strength: 0 });
@@ -430,11 +444,36 @@ export default function Home() {
     let last = performance.now();
     let lastBurstRequest = 0;
     let lastHandTrigger = 0;
-    let lastPalmMistAt = 0;
     let cloudArmed = false;
     let lastCloudSeenAt = 0;
     let lastCloudCompressAt = 0;
+    let pinwheelSequence = 0;
+    let seededPinwheels = false;
     const smokeLimit = window.innerWidth <= 760 ? 128 : 170;
+    const pinwheelLimit = window.innerWidth <= 760 ? 10 : 14;
+
+    const spawnPinwheels = (x: number, y: number, count: number) => {
+      for (let index = 0; index < count; index += 1) {
+        const maxLife = 7600 + Math.random() * 4200;
+        const angle = Math.random() * Math.PI * 2;
+        pinwheelsRef.current.push({
+          x: x + (Math.random() - .5) * 34,
+          y: y + (Math.random() - .5) * 26,
+          vx: Math.cos(angle) * (.012 + Math.random() * .026),
+          vy: -.018 - Math.random() * .026,
+          size: 14 + Math.random() * 9,
+          angle,
+          spin: (index % 2 === 0 ? 1 : -1) * (.0024 + Math.random() * .0018),
+          color: pinwheelSequence++ % 2 === 0 ? "red" : "blue",
+          life: maxLife,
+          maxLife,
+          phase: Math.random() * Math.PI * 2,
+        });
+      }
+      if (pinwheelsRef.current.length > pinwheelLimit) {
+        pinwheelsRef.current.splice(0, pinwheelsRef.current.length - pinwheelLimit);
+      }
+    };
 
     const burstBubble = (bubble: Bubble) => {
       const radius = Math.max(12, bubble.sr);
@@ -461,6 +500,7 @@ export default function Home() {
           opacity: .28 + Math.random() * .4,
         });
       }
+      spawnPinwheels(bubble.sx, bubble.sy, 1);
       setPopped((value) => value + 1);
       if ("vibrate" in navigator) navigator.vibrate([12, 22, 9]);
     };
@@ -502,6 +542,7 @@ export default function Home() {
       if (smokeRef.current.length > smokeLimit) {
         smokeRef.current.splice(0, smokeRef.current.length - smokeLimit);
       }
+      spawnPinwheels(x, y, 3);
       if ("vibrate" in navigator) navigator.vibrate([10, 18, 24]);
     };
 
@@ -511,6 +552,16 @@ export default function Home() {
       if (canvas.width !== Math.round(rect.width * ratio) || canvas.height !== Math.round(rect.height * ratio)) {
         canvas.width = Math.round(rect.width * ratio);
         canvas.height = Math.round(rect.height * ratio);
+      }
+      if (!seededPinwheels && stage.dataset.entered === "true") {
+        seededPinwheels = true;
+        for (let index = 0; index < 4; index += 1) {
+          spawnPinwheels(
+            rect.width * (.28 + index * .15),
+            rect.height * (.76 + index % 2 * .08),
+            1,
+          );
+        }
       }
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.clearRect(0, 0, rect.width, rect.height);
@@ -573,26 +624,6 @@ export default function Home() {
         palmX: tracked.palmX * rect.width,
         palmY: tracked.palmY * rect.height,
       }));
-      if (screenHands.length > 0 && now - lastPalmMistAt > (rect.width <= 760 ? 82 : 58)) {
-        lastPalmMistAt = now;
-        for (const tracked of screenHands) {
-          const maxLife = 720 + Math.random() * 420;
-          smokeRef.current.push({
-            x: tracked.palmX + (Math.random() - .5) * 22,
-            y: tracked.palmY + (Math.random() - .5) * 18,
-            vx: (Math.random() - .5) * .018,
-            vy: -.012 - Math.random() * .018,
-            size: 10 + Math.random() * 13,
-            life: maxLife,
-            maxLife,
-            phase: Math.random() * Math.PI * 2,
-            opacity: .13 + Math.random() * .14,
-          });
-        }
-        if (smokeRef.current.length > smokeLimit) {
-          smokeRef.current.splice(0, smokeRef.current.length - smokeLimit);
-        }
-      }
 
       let cloudGesture: {
         first: (typeof screenHands)[number];
@@ -762,20 +793,9 @@ export default function Home() {
         return true;
       });
 
-      context.save();
-      context.globalCompositeOperation = "screen";
-      for (const tracked of screenHands) {
-        for (let orbit = 0; orbit < 3; orbit += 1) {
-          const angle = now * (.0014 + orbit * .00018) + orbit * Math.PI * .68;
-          const orbitRadius = 16 + orbit * 6;
-          const size = 14 + orbit * 3 + Math.sin(now * .002 + orbit) * 2;
-          const x = tracked.palmX + Math.cos(angle) * orbitRadius;
-          const y = tracked.palmY + Math.sin(angle * .82) * orbitRadius * .62;
-          context.globalAlpha = .1 + orbit * .035;
-          context.drawImage(smokeSprite, x - size, y - size, size * 2, size * 2);
-        }
-      }
       if (cloudGesture) {
+        context.save();
+        context.globalCompositeOperation = "screen";
         const dx = cloudGesture.second.palmX - cloudGesture.first.palmX;
         const dy = cloudGesture.second.palmY - cloudGesture.first.palmY;
         const distance = Math.max(1, cloudGesture.distance);
@@ -801,8 +821,8 @@ export default function Home() {
           centerSize * 2,
           centerSize * 2,
         );
+        context.restore();
       }
-      context.restore();
 
       if (wind.strength > .045) {
         const length = 70 + wind.strength * 150;
@@ -827,6 +847,60 @@ export default function Home() {
         }
         context.restore();
       }
+
+      pinwheelsRef.current = pinwheelsRef.current.filter((pinwheel) => {
+        pinwheel.life -= dt;
+        if (pinwheel.life <= 0) return false;
+        pinwheel.x += pinwheel.vx * dt + wind.x * wind.strength * .028 * dt;
+        pinwheel.y += pinwheel.vy * dt + wind.y * wind.strength * .018 * dt;
+        pinwheel.vx *= Math.pow(.994, dt / 16.67);
+        pinwheel.vy *= Math.pow(.998, dt / 16.67);
+        const spinDirection = Math.sign(pinwheel.spin) || 1;
+        pinwheel.angle += (pinwheel.spin + spinDirection * (wind.strength * .011 + energy * .004)) * dt;
+        const age = 1 - pinwheel.life / pinwheel.maxLife;
+        const alpha = Math.min(1, age * 6) * Math.min(1, pinwheel.life / 1100);
+        if (pinwheel.y < -pinwheel.size * 3 || pinwheel.x < -pinwheel.size * 4 || pinwheel.x > rect.width + pinwheel.size * 4) {
+          return false;
+        }
+
+        const primary = pinwheel.color === "red" ? "rgba(255,76,110,.96)" : "rgba(52,178,255,.96)";
+        const secondary = pinwheel.color === "red" ? "rgba(255,164,178,.94)" : "rgba(160,232,255,.94)";
+        context.save();
+        context.globalCompositeOperation = "screen";
+        context.globalAlpha = alpha * .92;
+        context.translate(pinwheel.x, pinwheel.y);
+        context.rotate(Math.sin(now * .0013 + pinwheel.phase) * .09);
+        context.strokeStyle = "rgba(218,242,255,.58)";
+        context.lineWidth = Math.max(.8, pinwheel.size * .055);
+        context.beginPath();
+        context.moveTo(0, pinwheel.size * .16);
+        context.lineTo(0, pinwheel.size * 1.72);
+        context.stroke();
+        context.rotate(pinwheel.angle);
+        context.shadowColor = pinwheel.color === "red" ? "#ff6f91" : "#55cfff";
+        context.shadowBlur = 8;
+        for (let blade = 0; blade < 4; blade += 1) {
+          context.beginPath();
+          context.moveTo(0, 0);
+          context.quadraticCurveTo(
+            pinwheel.size * .12,
+            -pinwheel.size * .72,
+            pinwheel.size * .72,
+            -pinwheel.size * .48,
+          );
+          context.quadraticCurveTo(pinwheel.size * .5, -pinwheel.size * .08, 0, 0);
+          context.fillStyle = blade % 2 === 0 ? primary : secondary;
+          context.fill();
+          context.rotate(Math.PI * .5);
+        }
+        context.shadowBlur = 0;
+        context.beginPath();
+        context.arc(0, 0, pinwheel.size * .12, 0, Math.PI * 2);
+        context.fillStyle = "rgba(248,253,255,.96)";
+        context.fill();
+        context.restore();
+        return true;
+      });
 
       for (const tracked of screenHands) {
         if (tracked.landmarks.length !== 21) continue;
@@ -972,7 +1046,7 @@ export default function Home() {
           <button type="button" className={surround ? "active" : ""} onClick={() => void toggleSurround()} aria-pressed={surround} title="开启空间3D环绕；手机可跟随转动">
             <span className="surround-icon">◎</span>{surround ? "3D环绕" : "开启3D"}
           </button>
-          <button type="button" className={cameraActive ? "active" : ""} onClick={() => void toggleCamera()} aria-pressed={cameraActive} title="开启摄像头：烟雾缠绕手掌；双手拉开成云，合拢压成泡泡">
+          <button type="button" className={cameraActive ? "active" : ""} onClick={() => void toggleCamera()} aria-pressed={cameraActive} title="开启摄像头：双手拉开形成云带，合拢压成泡泡；挥手让红蓝风车旋转">
             <span className="camera-icon">◉</span>{cameraStatus === "loading" ? "识别中" : cameraStatus === "error" ? "请授权" : cameraActive ? "双手捏云" : "伸手触碰"}
           </button>
           <label className="music-picker" title={`选择你有权使用的本地音乐 · ${musicName}`}>
